@@ -11,6 +11,11 @@ frontend/node_modules
 frontend/dist
 backend/models/*
 !backend/models/.gitkeep
+!backend/models/helmet_best.pt
+!backend/models/license_plate_best.pt
+!backend/models/redlight_best.pt
+!backend/models/seatbelt_best.pt
+!backend/models/vehicle_best.pt
 backend/uploads/*
 backend/static/outputs/*
 *.db

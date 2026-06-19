@@ -16,9 +16,14 @@ backend/static/outputs/*
 *.sqlite
 *.sqlite3
 
-# Large/local model files - do not push to GitHub
+# Track the five deployment models; ignore malformed duplicates and other weights.
 backend/models/*
 !backend/models/.gitkeep
+!backend/models/helmet_best.pt
+!backend/models/license_plate_best.pt
+!backend/models/redlight_best.pt
+!backend/models/seatbelt_best.pt
+!backend/models/vehicle_best.pt
 
 # Env
 .env

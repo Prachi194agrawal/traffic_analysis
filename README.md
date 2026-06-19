@@ -93,7 +93,7 @@ When running through Docker, prefix these routes with `/api`, for example `http:
 
 ## Model weights
 
-Place custom model files in `backend/models/` with these names:
+The deployment includes these canonical model files in `backend/models/`:
 
 ```text
 license_plate_best.pt
@@ -103,7 +103,7 @@ redlight_best.pt
 vehicle_best.pt
 ```
 
-Model weights are deliberately excluded from Git and Docker build contexts. In Docker, copy custom weights into the `model_data` volume or mount a host model directory at `/app/models`. Missing supported models are downloaded on first use.
+These weights are tracked because every file is below GitHub's per-file limit. Docker copies them into the image, and a new `model_data` volume is initialized from that image. To replace a model, use the same canonical filename and rebuild the backend. Missing supported models are still downloaded on first use.
 
 ## Tests
 
