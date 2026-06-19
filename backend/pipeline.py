@@ -1,5 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
+import os
 import re
 from typing import Any, Dict, List, Tuple
 
@@ -15,6 +16,8 @@ from model_manager import load_yolo_model
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "static" / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+EASYOCR_MODEL_DIR = Path(os.getenv("EASYOCR_MODEL_DIR", BASE_DIR / "models" / "easyocr"))
+EASYOCR_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _to_builtin(value: Any):
@@ -49,7 +52,11 @@ class TrafficPipeline:
         self.redlight_model = load_yolo_model("redlight")
 
         print("[INFO] Loading EasyOCR...")
-        self.reader = easyocr.Reader(["en"], gpu=torch.cuda.is_available())
+        self.reader = easyocr.Reader(
+            ["en"],
+            gpu=torch.cuda.is_available(),
+            model_storage_directory=str(EASYOCR_MODEL_DIR),
+        )
         print("[INFO] EasyOCR loaded.")
 
     # -------------------------

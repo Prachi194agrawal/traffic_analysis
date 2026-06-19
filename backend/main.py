@@ -8,6 +8,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from database import (
     analysis_to_dict,
@@ -35,6 +36,14 @@ def get_pipeline():
     from pipeline import TrafficPipeline
 
     return TrafficPipeline()
+
+
+def run_analysis(image_path: str, conf: float, stopline_y_ratio: float):
+    return get_pipeline().analyze_image(
+        image_path=image_path,
+        conf=conf,
+        stopline_y_ratio=stopline_y_ratio,
+    )
 
 
 @asynccontextmanager
@@ -121,10 +130,11 @@ async def analyze_image(
     input_path.write_bytes(content)
 
     try:
-        result = get_pipeline().analyze_image(
-            image_path=str(input_path),
-            conf=conf,
-            stopline_y_ratio=stopline_y_ratio,
+        result = await run_in_threadpool(
+            run_analysis,
+            str(input_path),
+            conf,
+            stopline_y_ratio,
         )
         analysis = create_analysis(
             original_filename=original_filename,

@@ -9,7 +9,8 @@
 **/.venv
 frontend/node_modules
 frontend/dist
-backend/models/*.pt
+backend/models/*
+!backend/models/.gitkeep
 backend/uploads/*
 backend/static/outputs/*
 *.db
