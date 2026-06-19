@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# Runtime files
+backend/uploads/*
+backend/static/outputs/*
+!backend/static/outputs/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# Large/local model files - do not push to GitHub
+backend/models/*
+!backend/models/.gitkeep
+
+# Env
+.env
+.env.*
+!.env.example
