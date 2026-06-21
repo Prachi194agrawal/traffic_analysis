@@ -148,6 +148,73 @@ def get_analysis(analysis_id: str) -> Analysis | None:
         return session.scalar(statement)
 
 
+def get_analytics() -> dict[str, Any]:
+    analyses = list_analyses(1000)
+    status_counts = {"violation_detected": 0, "review_required": 0, "analysis_complete": 0}
+    violation_types = {
+        "Helmet non-compliance": 0,
+        "Seat belt non-compliance": 0,
+        "Red-light violation": 0,
+        "Triple riding": 0,
+        "Wrong-side review": 0,
+        "Illegal parking review": 0,
+    }
+    analyses_by_day: dict[str, int] = {}
+    latencies: list[float] = []
+
+    for analysis in analyses:
+        summary = analysis.summary or {}
+        status = str(summary.get("final_status", analysis.final_status))
+        status = {
+            "violation_found": "violation_detected",
+            "no_clear_violation": "analysis_complete",
+        }.get(status, status)
+        status_counts[status] = status_counts.get(status, 0) + 1
+        day = analysis.created_at.date().isoformat()
+        analyses_by_day[day] = analyses_by_day.get(day, 0) + 1
+        if isinstance(summary.get("processing_time_ms"), (int, float)):
+            latencies.append(float(summary["processing_time_ms"]))
+        if summary.get("helmet_status") == "violation_detected":
+            violation_types["Helmet non-compliance"] += 1
+        if summary.get("seatbelt_status") == "violation_detected":
+            violation_types["Seat belt non-compliance"] += 1
+        if summary.get("redlight_violation") is True:
+            violation_types["Red-light violation"] += 1
+        violation_types["Triple riding"] += int(summary.get("triple_riding_count") or 0)
+        violation_types["Wrong-side review"] += int(summary.get("wrong_side_review_count") or 0)
+        violation_types["Illegal parking review"] += int(summary.get("illegal_parking_review_count") or 0)
+
+    total = len(analyses)
+    completed = status_counts.get("analysis_complete", 0)
+    recent = [
+        {
+            "id": item.id,
+            "created_at": item.created_at.isoformat(),
+            "original_filename": item.original_filename,
+            "final_status": {
+                "violation_found": "violation_detected",
+                "no_clear_violation": "analysis_complete",
+            }.get(str((item.summary or {}).get("final_status", item.final_status)), str((item.summary or {}).get("final_status", item.final_status))),
+            "risk_score": (item.summary or {}).get("risk_score", 0),
+            "severity": (item.summary or {}).get("severity", "low"),
+            "recognized_plates": (item.summary or {}).get("recognized_plates") or [],
+        }
+        for item in analyses[:8]
+    ]
+    return {
+        "total_analyses": total,
+        "status_counts": status_counts,
+        "violation_types": violation_types,
+        "analyses_by_day": [
+            {"date": day, "count": count} for day, count in sorted(analyses_by_day.items())[-14:]
+        ],
+        "clear_rate": round((completed / total) * 100, 1) if total else 0.0,
+        "average_processing_ms": round(sum(latencies) / len(latencies), 1) if latencies else None,
+        "measured_latency_samples": len(latencies),
+        "recent_cases": recent,
+    }
+
+
 def analysis_to_dict(analysis: Analysis, include_detections: bool = False) -> dict[str, Any]:
     data: dict[str, Any] = {
         "id": analysis.id,

@@ -216,6 +216,59 @@ class TrafficPipeline:
             return False
         return "seatbelt" in name or "seat_belt" in name or "seat belt" in name or "belt" in name
 
+    @staticmethod
+    def preprocess_image(img, mode: str):
+        if mode == "none":
+            return img.copy()
+
+        def enhance_contrast(source):
+            lab = cv2.cvtColor(source, cv2.COLOR_BGR2LAB)
+            lightness, channel_a, channel_b = cv2.split(lab)
+            lightness = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8)).apply(lightness)
+            return cv2.cvtColor(cv2.merge((lightness, channel_a, channel_b)), cv2.COLOR_LAB2BGR)
+
+        if mode == "low_light":
+            gamma = 0.62
+            table = np.array([((value / 255.0) ** gamma) * 255 for value in range(256)]).astype("uint8")
+            return enhance_contrast(cv2.LUT(img, table))
+        if mode == "denoise":
+            return cv2.bilateralFilter(img, 9, 65, 65)
+        if mode == "sharpen":
+            kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+            return cv2.filter2D(img, -1, kernel)
+        if mode == "contrast":
+            return enhance_contrast(img)
+        if mode == "auto":
+            contrasted = enhance_contrast(img)
+            blurred = cv2.GaussianBlur(contrasted, (0, 0), 1.2)
+            return cv2.addWeighted(contrasted, 1.35, blurred, -0.35, 0)
+        raise ValueError(f"Unsupported preprocessing mode: {mode}")
+
+    @staticmethod
+    def expand_box(bbox, image_shape, x_ratio: float = 0.35, top_ratio: float = 1.8, bottom_ratio: float = 0.3):
+        image_height, image_width = image_shape[:2]
+        x1, y1, x2, y2 = bbox
+        width, height = x2 - x1, y2 - y1
+        return [
+            max(0, int(x1 - width * x_ratio)),
+            max(0, int(y1 - height * top_ratio)),
+            min(image_width, int(x2 + width * x_ratio)),
+            min(image_height, int(y2 + height * bottom_ratio)),
+        ]
+
+    @staticmethod
+    def center_inside(bbox, region) -> bool:
+        x1, y1, x2, y2 = bbox
+        center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+        rx1, ry1, rx2, ry2 = region
+        return rx1 <= center_x <= rx2 and ry1 <= center_y <= ry2
+
+    @staticmethod
+    def ratio_region_to_pixels(region, image_shape):
+        image_height, image_width = image_shape[:2]
+        x1, y1, x2, y2 = region
+        return [int(x1 * image_width), int(y1 * image_height), int(x2 * image_width), int(y2 * image_height)]
+
     # -------------------------
     # Main pipeline
     # -------------------------
@@ -225,12 +278,17 @@ class TrafficPipeline:
         conf: float = 0.25,
         stopline_y_ratio: float = 0.72,
         selected_modules: List[str] | None = None,
+        preprocessing: str = "none",
+        no_parking_zone: List[float] | None = None,
+        legal_traffic_side: str = "left",
     ):
         selected_modules = selected_modules or list(ANALYSIS_MODULES)
         selected = set(selected_modules)
-        img = self.read_image_any(image_path)
-        if img is None:
+        original_img = self.read_image_any(image_path)
+        if original_img is None:
             raise ValueError("Image not readable")
+
+        img = self.preprocess_image(original_img, preprocessing)
 
         annotated = img.copy()
         h, w = img.shape[:2]
@@ -238,14 +296,19 @@ class TrafficPipeline:
         module_results: Dict[str, Dict[str, Any]] = {}
 
         # Vehicle detections are also an internal dependency for seat belt crops.
-        needs_vehicle_detections = "vehicle" in selected or "seatbelt" in selected
+        needs_vehicle_detections = bool(
+            selected.intersection({"vehicle", "seatbelt", "triple_riding", "wrong_side", "illegal_parking"})
+        )
         vehicle_model = self.get_model("vehicle") if needs_vehicle_detections else None
         vehicle_dets_raw = self.predict_yolo(vehicle_model, img, conf=conf)
         vehicle_dets = []
+        person_dets = []
         for det in vehicle_dets_raw:
             cname = det["class_name"].lower()
             if self.is_vehicle_class(cname):
                 vehicle_dets.append(det)
+            elif cname == "person":
+                person_dets.append(det)
 
         if "vehicle" in selected:
             for det in vehicle_dets:
@@ -424,6 +487,116 @@ class TrafficPipeline:
                 "message": seatbelt_messages[seatbelt_global_status],
             }
 
+        # Explainable overlap heuristic for triple riding.
+        triple_riding_count = 0
+        if "triple_riding" in selected:
+            two_wheelers = [
+                det for det in vehicle_dets
+                if any(name in det["class_name"].lower() for name in ["motorcycle", "bike", "bicycle"])
+            ]
+            for vehicle in two_wheelers:
+                rider_region = self.expand_box(vehicle["bbox"], img.shape)
+                riders = [person for person in person_dets if self.center_inside(person["bbox"], rider_region)]
+                if len(riders) >= 3:
+                    triple_riding_count += 1
+                    combined_confidence = float(np.mean([vehicle["confidence"], *[rider["confidence"] for rider in riders]]))
+                    self.draw_box(
+                        annotated,
+                        rider_region,
+                        f"Triple riding - {len(riders)} riders",
+                        (38, 38, 220),
+                        3,
+                    )
+                    rows.append({
+                        "image_path": str(image_path), "module": "triple_riding_detection",
+                        "class_name": vehicle["class_name"], "confidence": combined_confidence,
+                        "bbox": rider_region, "ocr_text": None, "ocr_confidence": None,
+                        "rule": "three_or_more_riders_overlap_two_wheeler", "status": "violation"
+                    })
+            module_results["triple_riding"] = {
+                "status": "complete" if vehicle_model is not None else "unavailable",
+                "detections": triple_riding_count,
+                "two_wheelers_reviewed": len(two_wheelers),
+                "assessment": "violation_detected" if triple_riding_count else "not_detected",
+                "message": (
+                    f"{triple_riding_count} two-wheeler{'s' if triple_riding_count != 1 else ''} may have three or more riders."
+                    if triple_riding_count
+                    else f"No triple riding pattern found across {len(two_wheelers)} two-wheeler{'s' if len(two_wheelers) != 1 else ''}."
+                ),
+                "method": "Person-center overlap within an expanded two-wheeler region.",
+            }
+
+        # User-configured opposing-side spatial screening for a single image.
+        wrong_side_count = 0
+        if "wrong_side" in selected:
+            divider_x = int(w * 0.5)
+            wrong_region = [divider_x, 0, w, h] if legal_traffic_side == "left" else [0, 0, divider_x, h]
+            cv2.line(annotated, (divider_x, 0), (divider_x, h), (205, 113, 33), 2)
+            cv2.putText(
+                annotated,
+                f"EXPECTED TRAFFIC: {legal_traffic_side.upper()} SIDE",
+                (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (205, 113, 33), 2,
+            )
+            for vehicle in vehicle_dets:
+                if self.center_inside(vehicle["bbox"], wrong_region):
+                    wrong_side_count += 1
+                    self.draw_box(annotated, vehicle["bbox"], "Wrong-side review", (0, 147, 255), 3)
+                    rows.append({
+                        "image_path": str(image_path), "module": "wrong_side_screening",
+                        "class_name": vehicle["class_name"], "confidence": vehicle["confidence"],
+                        "bbox": vehicle["bbox"], "ocr_text": None, "ocr_confidence": None,
+                        "rule": f"vehicle_center_outside_expected_{legal_traffic_side}_side",
+                        "status": "review_required"
+                    })
+            module_results["wrong_side"] = {
+                "status": "complete" if vehicle_model is not None else "unavailable",
+                "detections": wrong_side_count,
+                "assessment": "review_required" if wrong_side_count else "not_detected",
+                "legal_traffic_side": legal_traffic_side,
+                "message": (
+                    f"{wrong_side_count} vehicle{'s' if wrong_side_count != 1 else ''} entered the opposing spatial zone; direction must be confirmed manually."
+                    if wrong_side_count
+                    else "No vehicles were found in the configured opposing-side zone."
+                ),
+                "method": "Single-frame spatial screening; motion direction is not inferred.",
+            }
+
+        # Restricted-zone parking screening. A still image can only require review,
+        # because parking duration and vehicle motion are not observable.
+        illegal_parking_count = 0
+        if "illegal_parking" in selected:
+            zone_ratio = no_parking_zone or [0.65, 0.35, 0.98, 0.95]
+            parking_region = self.ratio_region_to_pixels(zone_ratio, img.shape)
+            px1, py1, px2, py2 = parking_region
+            cv2.rectangle(annotated, (px1, py1), (px2, py2), (125, 55, 230), 2)
+            cv2.putText(
+                annotated, "RESTRICTED PARKING ZONE", (px1 + 5, max(22, py1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (125, 55, 230), 2,
+            )
+            for vehicle in vehicle_dets:
+                if self.center_inside(vehicle["bbox"], parking_region):
+                    illegal_parking_count += 1
+                    self.draw_box(annotated, vehicle["bbox"], "Parking review", (125, 55, 230), 3)
+                    rows.append({
+                        "image_path": str(image_path), "module": "illegal_parking_screening",
+                        "class_name": vehicle["class_name"], "confidence": vehicle["confidence"],
+                        "bbox": vehicle["bbox"], "ocr_text": None, "ocr_confidence": None,
+                        "rule": "vehicle_center_inside_restricted_parking_zone",
+                        "status": "review_required"
+                    })
+            module_results["illegal_parking"] = {
+                "status": "complete" if vehicle_model is not None else "unavailable",
+                "detections": illegal_parking_count,
+                "assessment": "review_required" if illegal_parking_count else "not_detected",
+                "zone": zone_ratio,
+                "message": (
+                    f"{illegal_parking_count} vehicle{'s' if illegal_parking_count != 1 else ''} detected inside the restricted zone; stationary duration must be confirmed."
+                    if illegal_parking_count
+                    else "No vehicles were detected inside the configured restricted parking zone."
+                ),
+                "method": "Vehicle-center inclusion in a user-configured zone.",
+            }
+
         # Traffic signal detection and optional stop-line rule.
         redlight_dets: List[Dict[str, Any]] = []
         red_signal = green_signal = yellow_signal = False
@@ -514,14 +687,62 @@ class TrafficPipeline:
             helmet_violation
             or redlight_violation is True
             or seatbelt_global_status == "violation_detected"
+            or triple_riding_count > 0
         )
-        review_needed = seatbelt_global_status == "review_required"
+        review_needed = (
+            seatbelt_global_status == "review_required"
+            or wrong_side_count > 0
+            or illegal_parking_count > 0
+        )
         final_status = (
             "violation_detected"
             if violation_found
             else "review_required"
             if review_needed
             else "analysis_complete"
+        )
+
+        risk_score = 0
+        decision_reasons: List[str] = []
+        if helmet_violation:
+            risk_score += 30
+            decision_reasons.append("Possible helmet non-compliance detected.")
+        if seatbelt_global_status == "violation_detected":
+            risk_score += 25
+            decision_reasons.append("Possible seat belt non-compliance detected.")
+        elif seatbelt_global_status == "review_required":
+            risk_score += 10
+            decision_reasons.append("Seat belt visibility is inconclusive and requires review.")
+        if redlight_violation is True:
+            risk_score += 40
+            decision_reasons.append("A stop-line crossing coincided with a detected red signal.")
+        elif crossed_vehicle_count:
+            risk_score += 10
+            decision_reasons.append(f"{crossed_vehicle_count} vehicle(s) crossed the configured stop line.")
+        if triple_riding_count:
+            risk_score += min(50, 35 * triple_riding_count)
+            decision_reasons.append(f"Triple-riding overlap found on {triple_riding_count} two-wheeler(s).")
+        if illegal_parking_count:
+            risk_score += min(30, 15 * illegal_parking_count)
+            decision_reasons.append(f"{illegal_parking_count} vehicle(s) require restricted-zone parking review.")
+        if wrong_side_count:
+            risk_score += min(40, 20 * wrong_side_count)
+            decision_reasons.append(f"{wrong_side_count} vehicle(s) require wrong-side direction review.")
+        unreadable_plate_count = max(0, len(plate_dets) - len(recognized_plates))
+        if unreadable_plate_count:
+            risk_score += min(10, 5 * unreadable_plate_count)
+            decision_reasons.append(f"Text was unclear on {unreadable_plate_count} detected plate(s).")
+
+        risk_score = min(100, risk_score)
+        severity = "high" if risk_score >= 60 else "medium" if risk_score >= 30 else "low"
+        if not decision_reasons:
+            decision_reasons.append("No clear violation was identified by the selected modules.")
+        recommendation = (
+            "Prioritize for enforcement review."
+            if severity == "high"
+            else "Review flagged evidence before taking action."
+            if final_status == "review_required" or severity == "medium"
+            else "Archive the analysis; no immediate action is indicated."
         )
 
         rows.append({
@@ -544,6 +765,14 @@ class TrafficPipeline:
             "yellow_signal": yellow_signal if "redlight" in selected else None,
             "crossed_vehicle_count": crossed_vehicle_count,
             "redlight_violation": redlight_violation,
+            "triple_riding_count": triple_riding_count if "triple_riding" in selected else None,
+            "wrong_side_review_count": wrong_side_count if "wrong_side" in selected else None,
+            "illegal_parking_review_count": illegal_parking_count if "illegal_parking" in selected else None,
+            "preprocessing": preprocessing,
+            "risk_score": risk_score,
+            "severity": severity,
+            "decision_reasons": decision_reasons,
+            "recommendation": recommendation,
             "final_status": final_status,
         }
 
@@ -551,11 +780,15 @@ class TrafficPipeline:
         annotated_name = f"annotated_{uid}.jpg"
         meta_name = f"meta_{uid}.csv"
         summary_name = f"summary_{uid}.csv"
+        processed_name = f"processed_{uid}.jpg" if preprocessing != "none" else None
         annotated_path = OUTPUT_DIR / annotated_name
         meta_path = OUTPUT_DIR / meta_name
         summary_path = OUTPUT_DIR / summary_name
+        processed_path = OUTPUT_DIR / processed_name if processed_name else None
 
         cv2.imwrite(str(annotated_path), annotated)
+        if processed_path is not None:
+            cv2.imwrite(str(processed_path), img)
         meta_df = pd.DataFrame(rows)
         summary_df = pd.DataFrame([summary])
         meta_df.to_csv(meta_path, index=False)
@@ -572,4 +805,5 @@ class TrafficPipeline:
             "meta": dataframe_to_records(meta_df),
             "selected_modules": selected_modules,
             "module_results": module_results,
+            "processed_name": processed_name,
         }

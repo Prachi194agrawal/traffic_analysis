@@ -19,9 +19,30 @@ The interface provides five independent modules:
 - License Plate Recognition
 - Helmet Compliance
 - Seat Belt Compliance
+- Triple Riding Detection
+- Wrong-Side Screening
+- Illegal Parking Review
 - Traffic Signal & Red-Light Analysis
 
 The backend executes only the selected modules. Seat belt analysis uses vehicle detection internally to locate supported vehicle regions. A red-light violation is assessed only when both Vehicle Detection and Traffic Signal & Red-Light are selected; otherwise, the signal module reports signal state only.
+
+Wrong-side and illegal-parking checks are deliberately reported as **review required**. A single image cannot prove travel direction or parking duration, so these modules apply transparent user-configured spatial rules and preserve the evidence for human confirmation. Triple riding uses an explainable person/two-wheeler overlap rule.
+
+Available preprocessing modes are: auto enhancement, low-light enhancement, denoise, sharpen, contrast enhancement, and no preprocessing.
+
+## Evidence and reporting
+
+Each completed analysis provides:
+
+- A formal case ID and timestamp
+- Original, enhanced, and annotated evidence views
+- Module-level findings and confidence values
+- Decision rationale and recommendation
+- Risk score (0–100) and Low/Medium/High severity
+- Searchable structured detection records
+- Downloadable PDF, CSV, and JSON reports
+
+The dashboard aggregates processing volume, review outcomes, violation categories, recent cases, and measured latency. The evaluation view reports model availability and measured runtime while clearly marking precision, recall, F1, and mAP as requiring a labeled validation dataset; those quality metrics are never fabricated.
 
 ## Architecture
 
@@ -101,6 +122,10 @@ Tables are created automatically when the API starts.
 - `POST /analyze` — upload and analyze an image
 - `GET /analyses?limit=20` — recent persisted analyses
 - `GET /analyses/{id}` — one analysis with detection rows
+- `GET /analyses/{id}/report.pdf` — formatted evidence report
+- `GET /analyses/{id}/report.csv` — detection evidence export
+- `GET /analytics` — aggregate operations and violation trends
+- `GET /evaluation` — measured runtime and model evaluation readiness
 - `GET /docs` — interactive OpenAPI documentation
 
 When running through Docker, prefix these routes with `/api`, for example `http://localhost:8080/api/docs`.

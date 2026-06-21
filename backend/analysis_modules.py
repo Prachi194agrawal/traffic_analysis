@@ -15,6 +15,18 @@ ANALYSIS_MODULES = {
         "title": "Seat Belt Compliance",
         "description": "Review seat belt use in supported vehicle regions.",
     },
+    "triple_riding": {
+        "title": "Triple Riding Detection",
+        "description": "Screen two-wheelers for three or more overlapping riders.",
+    },
+    "wrong_side": {
+        "title": "Wrong-Side Screening",
+        "description": "Flag vehicles in the user-configured opposing traffic zone for review.",
+    },
+    "illegal_parking": {
+        "title": "Illegal Parking Review",
+        "description": "Flag vehicles inside a configurable restricted parking zone.",
+    },
     "redlight": {
         "title": "Traffic Signal & Red-Light",
         "description": "Detect signal state and, with vehicles enabled, assess stop-line crossing.",
