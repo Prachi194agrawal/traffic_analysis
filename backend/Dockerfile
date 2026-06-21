@@ -31,7 +31,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY backend/ ./
 
-RUN useradd --create-home --uid 10001 appuser \
+RUN mkdir -p /app/bundled-models \
+    && cp /app/models/*.pt /app/bundled-models/ \
+    && useradd --create-home --uid 10001 appuser \
     && mkdir -p uploads static/outputs models \
     && chown -R appuser:appuser /app
 

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from analysis_modules import ANALYSIS_MODULES, normalize_modules
 from database import (
     analysis_to_dict,
     create_analysis,
@@ -38,11 +39,17 @@ def get_pipeline():
     return TrafficPipeline()
 
 
-def run_analysis(image_path: str, conf: float, stopline_y_ratio: float):
+def run_analysis(
+    image_path: str,
+    conf: float,
+    stopline_y_ratio: float,
+    selected_modules: list[str],
+):
     return get_pipeline().analyze_image(
         image_path=image_path,
         conf=conf,
         stopline_y_ratio=stopline_y_ratio,
+        selected_modules=selected_modules,
     )
 
 
@@ -89,6 +96,11 @@ def health():
     )
 
 
+@app.get("/modules")
+def available_modules():
+    return {"items": [{"key": key, **details} for key, details in ANALYSIS_MODULES.items()]}
+
+
 @app.get("/analyses")
 def analysis_history(limit: int = 20):
     safe_limit = max(1, min(limit, 100))
@@ -108,11 +120,16 @@ async def analyze_image(
     file: UploadFile = File(...),
     conf: float = Form(0.25),
     stopline_y_ratio: float = Form(0.72),
+    modules: str = Form("all"),
 ):
     if not 0.0 < conf <= 1.0:
         raise HTTPException(status_code=422, detail="conf must be between 0 and 1")
     if not 0.0 < stopline_y_ratio < 1.0:
         raise HTTPException(status_code=422, detail="stopline_y_ratio must be between 0 and 1")
+    try:
+        selected_modules = normalize_modules(modules)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     original_filename = Path(file.filename or "upload.jpg").name
     suffix = Path(original_filename).suffix.lower() or ".jpg"
@@ -135,6 +152,7 @@ async def analyze_image(
             str(input_path),
             conf,
             stopline_y_ratio,
+            selected_modules,
         )
         analysis = create_analysis(
             original_filename=original_filename,
@@ -151,6 +169,8 @@ async def analyze_image(
         "success": True,
         "analysis_id": analysis.id,
         "annotated_image_url": f"/static/outputs/{result['annotated_name']}",
+        "selected_modules": result["selected_modules"],
+        "module_results": result["module_results"],
         "summary": result["summary"],
         "meta": result["meta"],
     }

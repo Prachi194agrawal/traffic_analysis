@@ -11,20 +11,34 @@ import main
 
 
 class FakePipeline:
-    def analyze_image(self, image_path: str, conf: float, stopline_y_ratio: float):
+    def analyze_image(
+        self,
+        image_path: str,
+        conf: float,
+        stopline_y_ratio: float,
+        selected_modules: list[str],
+    ):
         return {
             "annotated_name": "annotated_test.jpg",
+            "selected_modules": selected_modules,
+            "module_results": {
+                key: {"status": "complete", "detections": 1, "message": "Test complete."}
+                for key in selected_modules
+            },
             "summary": {
+                "selected_modules": selected_modules,
                 "vehicle_count": 1,
                 "plate_count": 0,
-                "helmet_status": "helmet_unclear",
-                "seatbelt_status": "not_checked",
+                "recognized_plates": [],
+                "helmet_status": "not_detected",
+                "seatbelt_status": "not_selected",
+                "traffic_signal_status": "not_selected",
                 "red_signal": False,
                 "green_signal": False,
                 "yellow_signal": False,
-                "crossed_vehicle_count": 0,
-                "redlight_violation": False,
-                "final_status": "no_clear_violation",
+                "crossed_vehicle_count": None,
+                "redlight_violation": None,
+                "final_status": "analysis_complete",
             },
             "meta": [
                 {
@@ -49,12 +63,21 @@ def test_health_and_analysis_history(monkeypatch):
         assert health.status_code == 200
         assert health.json() == {"status": "ok", "database": True}
 
+        modules = client.get("/modules")
+        assert modules.status_code == 200
+        assert len(modules.json()["items"]) == 5
+
         response = client.post(
             "/analyze",
             files={"file": ("traffic.jpg", b"fake-image", "image/jpeg")},
-            data={"conf": "0.25", "stopline_y_ratio": "0.72"},
+            data={
+                "conf": "0.25",
+                "stopline_y_ratio": "0.72",
+                "modules": "vehicle,helmet",
+            },
         )
         assert response.status_code == 200
+        assert response.json()["selected_modules"] == ["vehicle", "helmet"]
         analysis_id = response.json()["analysis_id"]
 
         history = client.get("/analyses")
@@ -73,3 +96,14 @@ def test_rejects_non_image_extension():
             files={"file": ("payload.txt", b"not-an-image", "text/plain")},
         )
     assert response.status_code == 415
+
+
+def test_rejects_unknown_analysis_module():
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/analyze",
+            files={"file": ("traffic.jpg", b"fake-image", "image/jpeg")},
+            data={"modules": "vehicle,unknown"},
+        )
+    assert response.status_code == 422
+    assert "Unsupported analysis module" in response.json()["detail"]

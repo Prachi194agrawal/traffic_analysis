@@ -5,10 +5,23 @@ A container-ready traffic violation analysis application with a React frontend, 
 ## What it does
 
 - Detects vehicles, number plates, helmets, seatbelts, and traffic lights
+- Runs any module individually, in a custom group, or as a complete analysis
 - Applies stop-line and red-light violation rules
 - Produces an annotated image and detection metadata
 - Stores every analysis and its detection rows in a database
 - Exposes analysis history through the API
+
+## Selectable analysis
+
+The interface provides five independent modules:
+
+- Vehicle Detection
+- License Plate Recognition
+- Helmet Compliance
+- Seat Belt Compliance
+- Traffic Signal & Red-Light Analysis
+
+The backend executes only the selected modules. Seat belt analysis uses vehicle detection internally to locate supported vehicle regions. A red-light violation is assessed only when both Vehicle Detection and Traffic Signal & Red-Light are selected; otherwise, the signal module reports signal state only.
 
 ## Architecture
 
@@ -84,12 +97,15 @@ Tables are created automatically when the API starts.
 ## API
 
 - `GET /health` — application and database readiness
+- `GET /modules` — supported selectable analysis modules
 - `POST /analyze` — upload and analyze an image
 - `GET /analyses?limit=20` — recent persisted analyses
 - `GET /analyses/{id}` — one analysis with detection rows
 - `GET /docs` — interactive OpenAPI documentation
 
 When running through Docker, prefix these routes with `/api`, for example `http://localhost:8080/api/docs`.
+
+`POST /analyze` accepts a comma-separated `modules` form field, for example `vehicle,helmet,license_plate`. Use `all` to run the complete suite.
 
 ## Model weights
 

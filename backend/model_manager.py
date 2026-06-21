@@ -1,5 +1,6 @@
-from pathlib import Path
+import os
 import shutil
+from pathlib import Path
 from typing import Optional
 
 from huggingface_hub import hf_hub_download, list_repo_files
@@ -8,6 +9,7 @@ from ultralytics import YOLO
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+BUNDLED_MODELS_DIR = Path(os.getenv("BUNDLED_MODELS_DIR", BASE_DIR / "bundled-models"))
 
 MODEL_SOURCES = {
     "license_plate": {
@@ -65,6 +67,9 @@ def ensure_model_file(model_key: str) -> Optional[Path]:
         target = MODELS_DIR / "vehicle_best.pt"
         if target.exists():
             return target
+        bundled_target = BUNDLED_MODELS_DIR / "vehicle_best.pt"
+        if bundled_target.exists():
+            return bundled_target
         try:
             # Ultralytics downloads yolov8n.pt automatically if not present.
             YOLO("yolov8n.pt")
@@ -85,6 +90,10 @@ def ensure_model_file(model_key: str) -> Optional[Path]:
     target = MODELS_DIR / cfg["local_file"]
     if target.exists():
         return target
+
+    bundled_target = BUNDLED_MODELS_DIR / cfg["local_file"]
+    if bundled_target.exists():
+        return bundled_target
 
     return _download_hf_model(
         repo_id=cfg["repo_id"],
